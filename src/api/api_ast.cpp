@@ -516,10 +516,14 @@ static cache_t cache;
                 }
                 case OP_BADD: {
                     register expr * const * args = ARGS();
-                    arg1 = EVAL_ARG(args, 0);
-                    arg2 = EVAL_ARG(args, 1);
-                    //printf("BADD arg1=%lx arg2=%lx  size=%u mask=%lx\n", arg1, arg2, SIZE(expr), MASK(SIZE(expr)));
-                    arg1 = (arg1 + arg2) & MASK(SIZE(_expr));
+                    unsigned n_args = APP(_expr)->get_num_args();
+                    size_t i = 0;
+                    arg1 = 0;
+                    do {
+                        arg2 = EVAL_ARG(args, i);
+                        arg1 += arg2;
+                    } while (++i < n_args);
+                    arg1 = arg1 & MASK(SIZE(_expr));
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
 #endif
@@ -540,7 +544,6 @@ static cache_t cache;
                     register expr * const * args = ARGS();
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
-                    //printf("BADD arg1=%lx arg2=%lx  size=%u mask=%lx\n", arg1, arg2, SIZE(expr), MASK(SIZE(expr)));
                     arg1 = (arg1 * arg2) & MASK(SIZE(_expr));
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
