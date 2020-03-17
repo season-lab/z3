@@ -1017,7 +1017,7 @@ static cache_t cache;
                 }
                 case OP_EQ: {
                     register expr * const * args = ARGS();
-                    if (!IS_BOOL(args[0]) > 0 && SIZE(args[0]) > 64) {
+                    if (!IS_BOOL(args[0]) && SIZE(args[0]) > 64) {
                         arg1 = Z3_internal_eval(c, _expr, data, data_size);
 #if USE_CACHE
                         cache.insert(expr_id, arg1);
