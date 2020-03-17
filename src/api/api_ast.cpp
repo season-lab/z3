@@ -544,9 +544,7 @@ static cache_t cache;
                         }
                     }
                 }
-            }
-
-            if (f.m_curr_arg == 1) {
+            } else if (f.m_curr_arg == 1) {
                 if (f.m_fid == 0x6) {
                     switch(f.m_decl_kind) {
                         case OP_BNEG: {
