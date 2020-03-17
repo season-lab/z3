@@ -964,6 +964,8 @@ static cache_t cache;
                     register expr * const * args = ARGS();
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
+                    if (arg2 == 0)
+                        return MASK(SIZE(_expr)) & (~0UL);
                     OPERATION(arg1, arg2, SIZE(_expr), /, arg1);
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
@@ -974,6 +976,8 @@ static cache_t cache;
                     register expr * const * args = ARGS();
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
+                    if (arg2 == 0)
+                        return MASK(SIZE(_expr)) & (~0UL);
                     arg1 = (arg1 / arg2) & MASK(SIZE(_expr));
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
@@ -984,6 +988,8 @@ static cache_t cache;
                     register expr * const * args = ARGS();
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
+                    if (arg2 == 0)
+                        return MASK(SIZE(_expr)) & (~0UL);
                     OPERATION(arg1, arg2, SIZE(_expr), %, arg1);
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
@@ -994,6 +1000,8 @@ static cache_t cache;
                     register expr * const * args = ARGS();
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
+                    if (arg2 == 0)
+                        return MASK(SIZE(_expr)) & (~0UL);
                     arg1 = (arg1 % arg2) & MASK(SIZE(_expr));
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
