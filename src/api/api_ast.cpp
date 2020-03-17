@@ -359,6 +359,7 @@ extern "C" {
 
 #if USE_CACHE
 #include "util/chashtable.h"
+#include "util/vector.h"
 
 struct cache_hash {
     unsigned operator()(uint64_t const & d) const { return d; }
@@ -373,6 +374,10 @@ static cache_t cache;
 #endif
 
 #define ERROR(M)    notify_assertion_violation(__FILE__, __LINE__, #M);
+#define APP(e)      reinterpret_cast<app*>(e)
+#define MASK(s)     ((2LU << ((s) - 1LU)) - 1LU)
+#define SIZE(e)     (mk_c(c)->m().get_sort(to_expr(e)))->get_parameter(0).get_int()
+#define IS_BOOL(e)  ((mk_c(c)->m().get_sort(to_expr(e)))->get_num_parameters() == 0)
 
     static uint64_t Z3_internal_eval(Z3_context ctx, Z3_ast query, uint8_t* data, size_t size) {
 
@@ -417,10 +422,140 @@ static cache_t cache;
         printf("\n%s\n", z3_query_str);
     }
 
-#pragma GCC optimize (4)
+    struct eval_frame {
+        expr*           m_curr;
+        uint64_t        m_id;
+        func_decl*      m_decl;
+        func_decl_info* m_info;
+        uint64_t        m_res;
+        family_id       m_fid;
+        decl_kind       m_decl_kind;
+        unsigned        m_num_args;
+        unsigned        m_curr_arg;
+        eval_frame(expr * e, uint64_t id, func_decl* d, func_decl_info* i):
+            m_curr(e),
+            m_id(id),
+            m_decl(d),
+            m_info(i),
+            m_fid(-1) {
+        }
+    };
+
+    static svector<eval_frame> m_frame_stack;
+
+    static uint64_t Z3_custom_eval_internal_iter(Z3_context c, Z3_ast _expr, uint8_t* data, size_t data_size) {
+
+        // bootstrap
+        func_decl* _d      = APP(_expr)->get_decl();
+        m_frame_stack.push_back(eval_frame(to_expr(_expr), to_expr(_expr)->get_id(), _d, _d->get_info()));
+
+        uint64_t res; // hold the result from last iteration
+        while (!m_frame_stack.empty()) {
+
+            eval_frame& f = m_frame_stack.back();
+#if USE_CACHE
+            // check the cache
+            if (cache.find(f.m_id, res)) {
+                m_frame_stack.pop_back();
+                continue;
+            }
+#endif
+            // symbol
+            if (f.m_info == nullptr) {
+                int    symbol_index = f.m_decl->get_name().get_num();
+                res = data[symbol_index];
+#if USE_CACHE
+                cache.insert(f.m_id, res);
+#endif
+                m_frame_stack.pop_back();
+                continue;
+            }
+
+            // initialize other fields
+            if (f.m_fid == null_family_id) {
+                f.m_fid = f.m_info->get_family_id();
+                f.m_decl_kind = f.m_info->get_decl_kind();
+                f.m_num_args = APP(of_expr(f.m_curr))->get_num_args();
+                f.m_curr_arg = 0;
+                res = 0;
+            }
+
+            if (f.m_curr_arg == 1) {
+                if (f.m_fid == 0x6) {
+                    switch(f.m_decl_kind) {
+                        case OP_BV_NUM: {
+                            rational r = f.m_info->get_parameter(0).get_rational();
+                            res = r.get_uint64();
+                            m_frame_stack.pop_back();
+                            continue;
+                        }
+                        case OP_BIT1: {
+                            res = 1;
+                            m_frame_stack.pop_back();
+                            continue;
+                        }
+                        case OP_BIT0: {
+                            res = 0;
+                            m_frame_stack.pop_back();
+                            continue;
+                        }
+                        case OP_BNEG: {
+                            res = -res;
+                            m_frame_stack.pop_back();
+                            continue;
+                        }
+                        case OP_SIGN_EXT: {
+                            int n_bits = f.m_info->get_parameters()[0].get_int();
+                            expr * arg = APP(of_expr(f.m_curr))->get_args()[0];
+                            res |= MASK(n_bits) << SIZE(arg);
+                            m_frame_stack.pop_back();
+                            continue;
+                        }
+                        case OP_ZERO_EXT: {
+                            m_frame_stack.pop_back();
+                            continue;
+                        }
+                        case OP_EXTRACT: {
+                            const parameter* params = f.m_info->get_parameters();
+                            int high = params[0].get_int();
+                            int low = params[1].get_int();
+                            res = (res >> low) & MASK(high - low + 1);
+                            m_frame_stack.pop_back();
+                            continue;
+                        }
+                        default:
+                            f.m_res = res;
+                    }
+                } else { // f.m_fid == 0
+
+                }
+            } else if (f.m_curr_arg > 1) {
+
+            }
+
+            while (f.m_curr_arg < f.m_num_args) {
+                expr * arg = APP(of_expr(f.m_curr))->get_args()[f.m_curr_arg];
+                if (SIZE(arg) > 64) { // fallback to Z3
+                    res = Z3_internal_eval(c, of_ast(f.m_curr), data, data_size);
+                    m_frame_stack.pop_back();
+                    continue;
+                }
+                _d         = APP(of_expr(f.m_curr))->get_decl();
+                f.m_curr_arg += 1;
+                m_frame_stack.push_back(eval_frame(arg, arg->get_id(), _d, _d->get_info()));
+                continue;
+            }
+
+            res = f.m_res;
+            m_frame_stack.pop_back();
+        }
+
+        return res;
+    }
+
     static uint64_t Z3_custom_eval_internal(Z3_context c, Z3_ast _expr, uint8_t* data, size_t data_size) {
 
-        // print_z3_original(c, _expr);
+        //print_z3_original(c, _expr);
 
         uint64_t arg1;
 #if USE_CACHE
@@ -429,8 +564,6 @@ static cache_t cache;
             return arg1;
         }
 #endif
-
-#define APP(e)      reinterpret_cast<app*>(e)
 
 #if 0
         ast * _a = to_expr(expr);
@@ -468,8 +601,6 @@ static cache_t cache;
 
 #define ARGS()              (APP(_expr)->get_args())
 #define EVAL_ARG(args, i)   Z3_custom_eval_internal(c, of_ast(args[i]), data, data_size)
-#define SIZE(e)             (mk_c(c)->m().get_sort(to_expr(e)))->get_parameter(0).get_int()
-#define MASK(s)             ((2LU << ((s) - 1LU)) - 1LU)
 #define OPERATION(a, b, size, operator, res)                                        \
         switch (size) {                                                             \
             case 8:                                                                 \
@@ -743,7 +874,9 @@ static cache_t cache;
                     register int n_bits = _info->get_parameters()[0].get_int();
                     register expr * const * args = ARGS();
                     arg1 = EVAL_ARG(args, 0);
-                    arg2 = MASK(n_bits) << SIZE(args[0]);
+                    if  (arg1 & (1 << (SIZE(args[0]) - 1))) {
+                        arg1 |= MASK(n_bits) << SIZE(args[0]);
+                    }
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
 #endif
@@ -760,7 +893,7 @@ static cache_t cache;
                     register expr * const * args = ARGS();
 
                     if (SIZE(args[0]) > 64) {
-                        arg1 = Z3_internal_eval(c, of_ast(args[0]), data, data_size);
+                        arg1 = Z3_internal_eval(c, _expr, data, data_size);
 #if USE_CACHE
                         cache.insert(expr_id, arg1);
 #endif
@@ -826,10 +959,48 @@ static cache_t cache;
                 case OP_BSMUL_NO_OVFL: return Z3_OP_BSMUL_NO_OVFL;
                 case OP_BUMUL_NO_OVFL: return Z3_OP_BUMUL_NO_OVFL;
                 case OP_BSMUL_NO_UDFL: return Z3_OP_BSMUL_NO_UDFL;
-                case OP_BSDIV_I: return Z3_OP_BSDIV_I;
-                case OP_BUDIV_I: return Z3_OP_BUDIV_I;
-                case OP_BSREM_I: return Z3_OP_BSREM_I;
-                case OP_BUREM_I: return Z3_OP_BUREM_I;
+#endif
+                case OP_BSDIV_I:  {
+                    register expr * const * args = ARGS();
+                    arg1 = EVAL_ARG(args, 0);
+                    arg2 = EVAL_ARG(args, 1);
+                    OPERATION(arg1, arg2, SIZE(_expr), /, arg1);
+#if USE_CACHE
+                    cache.insert(expr_id, arg1);
+#endif
+                    return arg1;
+                }
+                case OP_BUDIV_I: {
+                    register expr * const * args = ARGS();
+                    arg1 = EVAL_ARG(args, 0);
+                    arg2 = EVAL_ARG(args, 1);
+                    arg1 = (arg1 / arg2) & MASK(SIZE(_expr));
+#if USE_CACHE
+                    cache.insert(expr_id, arg1);
+#endif
+                    return arg1;
+                }
+                case OP_BSREM_I:  {
+                    register expr * const * args = ARGS();
+                    arg1 = EVAL_ARG(args, 0);
+                    arg2 = EVAL_ARG(args, 1);
+                    OPERATION(arg1, arg2, SIZE(_expr), %, arg1);
+#if USE_CACHE
+                    cache.insert(expr_id, arg1);
+#endif
+                    return arg1;
+                }
+                case OP_BUREM_I: {
+                    register expr * const * args = ARGS();
+                    arg1 = EVAL_ARG(args, 0);
+                    arg2 = EVAL_ARG(args, 1);
+                    arg1 = (arg1 % arg2) & MASK(SIZE(_expr));
+#if USE_CACHE
+                    cache.insert(expr_id, arg1);
+#endif
+                    return arg1;
+                }
+#if 0
                 case OP_BSMOD_I: return Z3_OP_BSMOD_I;
 #endif
                 default:
@@ -846,6 +1017,13 @@ static cache_t cache;
                 }
                 case OP_EQ: {
                     register expr * const * args = ARGS();
+                    if (!IS_BOOL(args[0]) > 0 && SIZE(args[0]) > 64) {
+                        arg1 = Z3_internal_eval(c, _expr, data, data_size);
+#if USE_CACHE
+                        cache.insert(expr_id, arg1);
+#endif
+                        return arg1;
+                    }
                     arg1 = EVAL_ARG(args, 0) == EVAL_ARG(args, 1);
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
