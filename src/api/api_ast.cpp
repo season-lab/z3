@@ -355,7 +355,8 @@ extern "C" {
         Z3_CATCH_RETURN("");
     }
 
-#define USE_CACHE 1
+#define USE_CACHE       1
+#define ITERATIVE_EVAL  0
 
 #if USE_CACHE
 #include "util/chashtable.h"
@@ -378,6 +379,24 @@ static cache_t cache;
 #define MASK(s)     ((2LU << ((s) - 1LU)) - 1LU)
 #define SIZE(e)     (mk_c(c)->m().get_sort(to_expr(e)))->get_parameter(0).get_int()
 #define IS_BOOL(e)  ((mk_c(c)->m().get_sort(to_expr(e)))->get_num_parameters() == 0)
+#define ARGS(e)     (APP(of_expr(e))->get_args())
+#define OPERATION(a, b, size, operator, res)                                    \
+    switch (size) {                                                             \
+        case 8:                                                                 \
+            res = ((unsigned long)((int8_t)a operator(int8_t) b)) & MASK(8);    \
+            break;                                                              \
+        case 16:                                                                \
+            res = ((unsigned long)((int16_t)a operator(int16_t) b)) & MASK(16); \
+            break;                                                              \
+        case 32:                                                                \
+            res = ((unsigned long)((int32_t)a operator(int32_t) b)) & MASK(32); \
+            break;                                                              \
+        case 64:                                                                \
+            res = ((unsigned long)((int64_t)a operator(int64_t) b)) & MASK(64); \
+            break;                                                              \
+        default:                                                                \
+            ERROR("unexpected size [signed operation]");                        \
+    }
 
     static uint64_t Z3_internal_eval(Z3_context ctx, Z3_ast query, uint8_t* data, size_t size) {
 
@@ -445,24 +464,29 @@ static cache_t cache;
 
     static uint64_t Z3_custom_eval_internal_iter(Z3_context c, Z3_ast _expr, uint8_t* data, size_t data_size) {
 
+        uint64_t res; // hold the result from last iteration
+
+#if USE_CACHE
+        // check the cache
+        if (cache.find(to_expr(_expr)->get_id(), res)) {
+            return res;
+        }
+#endif
+
         // bootstrap
         func_decl* _d      = APP(_expr)->get_decl();
         m_frame_stack.push_back(eval_frame(to_expr(_expr), to_expr(_expr)->get_id(), _d, _d->get_info()));
 
-        uint64_t res; // hold the result from last iteration
         while (!m_frame_stack.empty()) {
 
             eval_frame& f = m_frame_stack.back();
-#if USE_CACHE
-            // check the cache
-            if (cache.find(f.m_id, res)) {
-                m_frame_stack.pop_back();
-                continue;
-            }
-#endif
+
+            //print_z3_original(c, of_ast(f.m_curr));
+
             // symbol
             if (f.m_info == nullptr) {
                 int    symbol_index = f.m_decl->get_name().get_num();
+                // printf("INPUT[%d] = %x\n", symbol_index, data[symbol_index]);
                 res = data[symbol_index];
 #if USE_CACHE
                 cache.insert(f.m_id, res);
@@ -480,12 +504,16 @@ static cache_t cache;
                 res = 0;
             }
 
-            if (f.m_curr_arg == 1) {
+            if (f.m_num_args == 0) {
                 if (f.m_fid == 0x6) {
                     switch(f.m_decl_kind) {
                         case OP_BV_NUM: {
                             rational r = f.m_info->get_parameter(0).get_rational();
                             res = r.get_uint64();
+#if USE_CACHE
+                            cache.insert(f.m_id, res);
+#endif
+                            //printf("NUMERAL = %lx\n", res);
                             m_frame_stack.pop_back();
                             continue;
                         }
@@ -499,54 +527,341 @@ static cache_t cache;
                             m_frame_stack.pop_back();
                             continue;
                         }
-                        case OP_BNEG: {
-                            res = -res;
+                        default:
+                            ERROR("Zero params in BV");
+                    }
+                } else {
+                    switch(f.m_decl_kind) {
+                        case OP_TRUE: {
+                            res = 1;
                             m_frame_stack.pop_back();
                             continue;
+                        }
+                        case OP_FALSE: {
+                            res = 0;
+                            m_frame_stack.pop_back();
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            if (f.m_curr_arg == 1) {
+                if (f.m_fid == 0x6) {
+                    switch(f.m_decl_kind) {
+                        case OP_BNEG: {
+                            res = -res;
+                            break;
                         }
                         case OP_SIGN_EXT: {
                             int n_bits = f.m_info->get_parameters()[0].get_int();
                             expr * arg = APP(of_expr(f.m_curr))->get_args()[0];
-                            res |= MASK(n_bits) << SIZE(arg);
-                            m_frame_stack.pop_back();
-                            continue;
+                            if (res & (1 << (SIZE(arg) - 1))) {
+                                res |= MASK(n_bits) << SIZE(arg);
+                            }
+                            break;
                         }
                         case OP_ZERO_EXT: {
-                            m_frame_stack.pop_back();
-                            continue;
+                            break;
                         }
                         case OP_EXTRACT: {
                             const parameter* params = f.m_info->get_parameters();
                             int high = params[0].get_int();
                             int low = params[1].get_int();
                             res = (res >> low) & MASK(high - low + 1);
-                            m_frame_stack.pop_back();
-                            continue;
+                            break;
                         }
-                        default:
-                            f.m_res = res;
                     }
                 } else { // f.m_fid == 0
-
+                    switch(f.m_decl_kind) {
+                        case OP_NOT: {
+                            res = !res;
+                            break;
+                        }
+                        case OP_ITE: {
+                            if (!res) {
+                                // skip TRUE expr since condition is false
+                                // printf("Skip ITE arg");
+                                f.m_curr_arg += 1;
+                            }
+                            break;
+                        }
+                        case OP_AND: {
+                            if (!res) {
+#if USE_CACHE
+                                cache.insert(f.m_id, res);
+#endif
+                                m_frame_stack.pop_back();
+                                continue;
+                            }
+                            break;
+                        }
+                        case OP_OR: {
+                            if (res) {
+#if USE_CACHE
+                                cache.insert(f.m_id, res);
+#endif
+                                m_frame_stack.pop_back();
+                                continue;
+                            }
+                            break;
+                        }
+                    }
                 }
             } else if (f.m_curr_arg > 1) {
-
+                if (f.m_fid == 0x6) {
+                    switch(f.m_decl_kind) {
+                        case OP_BADD: {
+                            // printf("BADD: %lx + %lx\n", f.m_res, res);
+                            res = (f.m_res + res) & MASK(SIZE(APP(f.m_curr)));
+                            break;
+                        }
+                        case OP_BSUB: {
+                            res = (f.m_res - res) & MASK(SIZE(APP(f.m_curr)));
+                            break;
+                        }
+                        case OP_BMUL: {
+                            res = (f.m_res * res) & MASK(SIZE(APP(f.m_curr)));
+                            break;
+                        }
+                        case OP_BSDIV: {
+                            if (res == 0) {
+                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                            } else {
+                                OPERATION(f.m_res, res, MASK(SIZE(APP(f.m_curr))), /, res);
+                            }
+                            break;
+                        }
+                        case OP_BUDIV: {
+                            if (res == 0) {
+                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                            } else {
+                                res = (f.m_res / res) & MASK(SIZE(APP(f.m_curr)));
+                            }
+                            break;
+                        }
+                        case OP_BSREM: {
+                            if (res == 0) {
+                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                            } else {
+                                OPERATION(f.m_res, res, MASK(SIZE(APP(f.m_curr))), %, res);
+                            }
+                            break;
+                        }
+                        case OP_BUREM: {
+                            if (res == 0) {
+                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                            } else {
+                                res = (f.m_res % res) & MASK(SIZE(APP(f.m_curr)));
+                            }
+                            break;
+                        }
+#if 0
+                        case OP_BSMOD: return Z3_OP_BSMOD;
+                        case OP_BSDIV0: return Z3_OP_BSDIV0;
+                        case OP_BUDIV0: return Z3_OP_BUDIV0;
+                        case OP_BSREM0: return Z3_OP_BUREM0;
+                        case OP_BUREM0: return Z3_OP_BUREM0;
+                        case OP_BSMOD0: return Z3_OP_BSMOD0;
+#endif
+                        case OP_ULEQ: {
+                            res = f.m_res <= res;
+                            break;
+                        }
+                        case OP_SLEQ: {
+                            OPERATION(f.m_res, res, SIZE(APP(ARGS(f.m_curr)[0])), <=, res);
+                            break;
+                        }
+                        case OP_UGEQ: {
+                            res = f.m_res >= res;
+                            break;
+                        }
+                        case OP_SGEQ: {
+                            OPERATION(f.m_res, res, SIZE(APP(ARGS(f.m_curr)[0])), >=, res);
+                            break;
+                        }
+                        case OP_ULT: {
+                            res = f.m_res < res;
+                            break;
+                        }
+                        case OP_SLT: {
+                            OPERATION(f.m_res, res, SIZE(APP(ARGS(f.m_curr)[0])), <, res);
+                            break;
+                        }
+                        case OP_UGT: {
+                            res = f.m_res > res;
+                            break;
+                        }
+                        case OP_SGT: {
+                            OPERATION(f.m_res, res, SIZE(APP(ARGS(f.m_curr)[0])), >, res);
+                            break;
+                        }
+                        case OP_BAND: {
+                            res = (f.m_res & res) & MASK(SIZE(APP(f.m_curr)));
+                            break;
+                        }
+                        case OP_BOR: {
+                            res = (f.m_res | res) & MASK(SIZE(APP(f.m_curr)));
+                            break;
+                        }
+                        case OP_BXOR: {
+                            res = (f.m_res ^ res) & MASK(SIZE(APP(f.m_curr)));
+                            break;
+                        }
+#if 0
+                        case OP_BNAND:    return Z3_OP_BNAND;
+                        case OP_BNOR:     return Z3_OP_BNOR;
+                        case OP_BXNOR:    return Z3_OP_BXNOR;
+#endif
+                        case OP_CONCAT: {
+                            expr * arg = ARGS(f.m_curr)[f.m_curr_arg - 1];
+                            res = (f.m_res << SIZE(arg)) | res;
+                            break;
+                        }
+#if 0
+                        case OP_REPEAT:       return Z3_OP_REPEAT;
+                        case OP_BREDOR:       return Z3_OP_BREDOR;
+                        case OP_BREDAND:      return Z3_OP_BREDAND;
+                        case OP_BCOMP:        return Z3_OP_BCOMP;
+#endif
+                        case OP_BSHL: {
+                            res = (f.m_res << res) & MASK(SIZE(APP(f.m_curr)));
+                            break;
+                        }
+                        case OP_BLSHR: {
+                            res = (f.m_res >> res) & MASK(SIZE(APP(f.m_curr)));
+                            break;
+                        }
+                        case OP_BASHR: {
+                            OPERATION(f.m_res, res, MASK(SIZE(APP(f.m_curr))), >>, res);
+                            break;
+                        }
+#if 0
+                        case OP_ROTATE_LEFT:  return Z3_OP_ROTATE_LEFT;
+                        case OP_ROTATE_RIGHT: return Z3_OP_ROTATE_RIGHT;
+                        case OP_EXT_ROTATE_LEFT:  return Z3_OP_EXT_ROTATE_LEFT;
+                        case OP_EXT_ROTATE_RIGHT: return Z3_OP_EXT_ROTATE_RIGHT;
+                        case OP_INT2BV:    return Z3_OP_INT2BV;
+                        case OP_BV2INT:    return Z3_OP_BV2INT;
+                        case OP_CARRY:     return Z3_OP_CARRY;
+                        case OP_XOR3:      return Z3_OP_XOR3;
+                        case OP_BIT2BOOL: return Z3_OP_BIT2BOOL;
+                        case OP_BSMUL_NO_OVFL: return Z3_OP_BSMUL_NO_OVFL;
+                        case OP_BUMUL_NO_OVFL: return Z3_OP_BUMUL_NO_OVFL;
+                        case OP_BSMUL_NO_UDFL: return Z3_OP_BSMUL_NO_UDFL;
+#endif
+                        case OP_BSDIV_I: {
+                            if (res == 0) {
+                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                            } else {
+                                OPERATION(f.m_res, res, MASK(SIZE(APP(f.m_curr))), /, res);
+                            }
+                            break;
+                        }
+                        case OP_BUDIV_I: {
+                            if (res == 0) {
+                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                            } else {
+                                res = (f.m_res / res) & MASK(SIZE(APP(f.m_curr)));
+                            }
+                            break;
+                        }
+                        case OP_BSREM_I: {
+                            if (res == 0) {
+                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                            } else {
+                                OPERATION(f.m_res, res, MASK(SIZE(APP(f.m_curr))), %, res);
+                            }
+                            break;
+                        }
+                        case OP_BUREM_I: {
+                            if (res == 0) {
+                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                            } else {
+                                res = (f.m_res % res) & MASK(SIZE(APP(f.m_curr)));
+                            }
+                            break;
+                        }
+#if 0
+                        case OP_BSMOD_I: return Z3_OP_BSMOD_I;
+#endif
+                    }
+                } else {
+                    switch(f.m_decl_kind) {
+                        case OP_EQ: {
+                            res = f.m_res == res;
+                            break;
+                        }
+                        case OP_ITE: {
+                            // res is already the result
+                            f.m_curr_arg += 1; // skip FALSE expr
+                            break;
+                        }
+                        case OP_AND: {
+                            // printf("AND: %lx && %lx\n", f.m_res, res);
+                            if (!res) {
+#if USE_CACHE
+                                cache.insert(f.m_id, res);
+#endif
+                                m_frame_stack.pop_back();
+                                continue;
+                            }
+                            break;
+                        }
+                        case OP_OR: {
+                            if (res) {
+#if USE_CACHE
+                                cache.insert(f.m_id, res);
+#endif
+                                m_frame_stack.pop_back();
+                                continue;
+                            }
+                            break;
+                        }
+                    }
+                }
             }
 
-            while (f.m_curr_arg < f.m_num_args) {
-                expr * arg = APP(of_expr(f.m_curr))->get_args()[f.m_curr_arg];
-                if (SIZE(arg) > 64) { // fallback to Z3
+            // save partial result
+            // printf("M_RES: %lx\n", res);
+            f.m_res = res;
+
+            if (f.m_curr_arg < f.m_num_args) {
+                expr * arg = ARGS(f.m_curr)[f.m_curr_arg];
+
+#if USE_CACHE
+                // check the cache
+                if (cache.find(arg->get_id(), res)) {
+                    f.m_curr_arg += 1;
+                    continue;
+                }
+#endif
+
+                if (!IS_BOOL(arg) && SIZE(arg) > 64) { // fallback to Z3
                     res = Z3_internal_eval(c, of_ast(f.m_curr), data, data_size);
+#if USE_CACHE
+                    cache.insert(f.m_id, res);
+#endif
                     m_frame_stack.pop_back();
                     continue;
                 }
-                _d         = APP(of_expr(f.m_curr))->get_decl();
+                //printf("RECURSION ON CHILD\n");
+                _d            = APP(arg)->get_decl();
                 f.m_curr_arg += 1;
                 m_frame_stack.push_back(eval_frame(arg, arg->get_id(), _d, _d->get_info()));
                 continue;
             }
+#if 0
+            uint64_t res_z3 = Z3_internal_eval(c, of_ast(f.m_curr), data, data_size);
+            if (res != res_z3) {
+                print_z3_original(c, of_ast(f.m_curr));
+                return 0;
+            }
+#endif
 
-            res = f.m_res;
+#if USE_CACHE
+            cache.insert(f.m_id, res);
+#endif
             m_frame_stack.pop_back();
         }
 
@@ -599,25 +914,9 @@ static cache_t cache;
         register family_id fid =  _info->get_family_id();
         register decl_kind _decl_kind = _info->get_decl_kind();
 
+#undef ARGS
 #define ARGS()              (APP(_expr)->get_args())
 #define EVAL_ARG(args, i)   Z3_custom_eval_internal(c, of_ast(args[i]), data, data_size)
-#define OPERATION(a, b, size, operator, res)                                        \
-        switch (size) {                                                             \
-            case 8:                                                                 \
-                res = ((unsigned long)((int8_t)a operator(int8_t) b)) & MASK(8);    \
-                break;                                                              \
-            case 16:                                                                \
-                res = ((unsigned long)((int16_t)a operator(int16_t) b)) & MASK(16); \
-                break;                                                              \
-            case 32:                                                                \
-                res = ((unsigned long)((int32_t)a operator(int32_t) b)) & MASK(32); \
-                break;                                                              \
-            case 64:                                                                \
-                res = ((unsigned long)((int64_t)a operator(int64_t) b)) & MASK(64); \
-                break;                                                              \
-            default:                                                                \
-                ERROR("unexpected size [signed operation]");                        \
-        }
 
         register uint64_t arg2;
         if (0x6 == fid) { // mk_c(c)->get_bv_fid()
@@ -1046,7 +1345,7 @@ static cache_t cache;
                     ERROR("Unknown BV operator");
             }
 
-        } else if (mk_c(c)->get_basic_fid() == fid) {
+        } else if (0x0 == fid) { // mk_c(c)->get_basic_fid()
             switch(_decl_kind) {
                 case OP_TRUE: {
                     return 1;
@@ -1150,7 +1449,11 @@ static cache_t cache;
     }
 
     uint64_t Z3_API Z3_custom_eval(Z3_context c, Z3_ast expr, uint8_t* data, size_t data_size) {
+#if ITERATIVE_EVAL
+        uint64_t res = Z3_custom_eval_internal_iter(c, expr, data, data_size);
+#else
         uint64_t res = Z3_custom_eval_internal(c, expr, data, data_size);
+#endif
 #if USE_CACHE
         cache.reset();
 #endif
