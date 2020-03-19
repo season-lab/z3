@@ -631,7 +631,7 @@ static cache_t cache;
                         }
                         case OP_BSDIV: {
                             if (res == 0) {
-                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                                res = ~0UL;
                             } else {
                                 OPERATION(f.m_res, res, SIZE(APP(f.m_curr)), /, res);
                             }
@@ -639,7 +639,7 @@ static cache_t cache;
                         }
                         case OP_BUDIV: {
                             if (res == 0) {
-                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                                res = ~0UL;
                             } else {
                                 res = (f.m_res / res) & MASK(SIZE(APP(f.m_curr)));
                             }
@@ -647,7 +647,7 @@ static cache_t cache;
                         }
                         case OP_BSREM: {
                             if (res == 0) {
-                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                                res = ~0UL;
                             } else {
                                 OPERATION(f.m_res, res, SIZE(APP(f.m_curr)), %, res);
                             }
@@ -655,7 +655,7 @@ static cache_t cache;
                         }
                         case OP_BUREM: {
                             if (res == 0) {
-                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
+                                res = ~0UL;
                             } else {
                                 res = (f.m_res % res) & MASK(SIZE(APP(f.m_curr)));
                             }
@@ -756,35 +756,19 @@ static cache_t cache;
                         case OP_BSMUL_NO_UDFL: return Z3_OP_BSMUL_NO_UDFL;
 #endif
                         case OP_BSDIV_I: {
-                            if (res == 0) {
-                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
-                            } else {
-                                OPERATION(f.m_res, res, SIZE(APP(f.m_curr)), /, res);
-                            }
+                            OPERATION(f.m_res, res, SIZE(APP(f.m_curr)), /, res);
                             break;
                         }
                         case OP_BUDIV_I: {
-                            if (res == 0) {
-                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
-                            } else {
-                                res = (f.m_res / res) & MASK(SIZE(APP(f.m_curr)));
-                            }
+                            res = (f.m_res / res) & MASK(SIZE(APP(f.m_curr)));
                             break;
                         }
                         case OP_BSREM_I: {
-                            if (res == 0) {
-                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
-                            } else {
-                                OPERATION(f.m_res, res, SIZE(APP(f.m_curr)), %, res);
-                            }
+                            OPERATION(f.m_res, res, SIZE(APP(f.m_curr)), %, res);
                             break;
                         }
                         case OP_BUREM_I: {
-                            if (res == 0) {
-                                res = MASK(SIZE(APP(f.m_curr))) & (~0UL);
-                            } else {
-                                res = (f.m_res % res) & MASK(SIZE(APP(f.m_curr)));
-                            }
+                            res = (f.m_res % res) & MASK(SIZE(APP(f.m_curr)));
                             break;
                         }
 #if 0
