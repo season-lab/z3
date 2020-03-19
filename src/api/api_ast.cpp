@@ -404,13 +404,17 @@ static cache_t cache;
         Z3_sort        sort = Z3_mk_bv_sort(ctx, 8);
         Z3_model       z3_m = Z3_mk_model(ctx);
         Z3_model_inc_ref(ctx, z3_m);
+        Z3_ast z3_vals[size];
 
         unsigned i;
         for (i = 0; i < size; ++i) {
-            Z3_ast  e    = Z3_mk_unsigned_int64(ctx, data[i], sort);
+            Z3_ast e = Z3_mk_unsigned_int64(ctx, data[i], sort);
+            Z3_inc_ref(ctx, e);
             Z3_symbol s = Z3_mk_int_symbol(ctx, i);
             Z3_func_decl decl  = Z3_mk_func_decl(ctx, s, 0, NULL, sort);
             Z3_add_const_interp(ctx, z3_m, decl, e);
+
+            z3_vals[i] = e;
         }
 
         // evaluate the query in the model
@@ -432,6 +436,9 @@ static cache_t cache;
         } else {
             res = Z3_get_bool_value(ctx, solution) == Z3_L_TRUE ? 1UL : 0UL;
         }
+
+        for (i = 0; i < size; ++i)
+            Z3_dec_ref(ctx, z3_vals[i]);
         return res;
     }
 
