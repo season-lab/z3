@@ -357,6 +357,8 @@ extern "C" {
 
 #define USE_CACHE       1
 #define ITERATIVE_EVAL  0
+#define INTERNAL_DIV    0
+#define INTERNAL_MUL    0
 
 #if USE_CACHE
 #include "util/chashtable.h"
@@ -380,6 +382,7 @@ static cache_t cache;
 #define SIZE(e)     (mk_c(c)->m().get_sort(to_expr(e)))->get_parameter(0).get_int()
 #define IS_BOOL(e)  ((mk_c(c)->m().get_sort(to_expr(e)))->get_num_parameters() == 0)
 #define ARGS(e)     (APP(of_expr(e))->get_args())
+#define OP(e)       (to_app(e)->get_decl()->get_info()->get_decl_kind())
 #define OPERATION(a, b, size, operator, res)                                    \
     switch (size) {                                                             \
         case 8:                                                                 \
@@ -398,13 +401,77 @@ static cache_t cache;
             ERROR("unexpected size [signed operation]");                        \
     }
 
-    static uint64_t Z3_internal_eval(Z3_context ctx, Z3_ast query, uint8_t* data, size_t size) {
+    static void print_z3_original(Z3_context ctx, Z3_ast e) {
+        Z3_set_ast_print_mode(ctx, Z3_PRINT_LOW_LEVEL);
+        const char* z3_query_str = Z3_ast_to_string(ctx, e);
+        printf("\n%s\n", z3_query_str);
+    }
 
+#if INTERNAL_DIV
+    uint64_t idivq(uint64_t rdx, uint64_t rax, uint64_t operand);
+        __asm__ (".globl idivq; idivq:");
+        __asm__ ("movq %rdx, %rcx;");
+        __asm__ ("movq %rdi, %rdx;");
+        __asm__ ("movq %rsi, %rax;");
+        __asm__ ("idivq %rcx;");
+        __asm__ ("retq;");
+
+    uint64_t divq(uint64_t rdx, uint64_t rax, uint64_t operand);
+        __asm__ (".globl divq; divq:");
+        __asm__ ("movq %rdx, %rcx;");
+        __asm__ ("movq %rdi, %rdx;");
+        __asm__ ("movq %rsi, %rax;");
+        __asm__ ("divq %rcx;");
+        __asm__ ("retq;");
+#endif
+
+#if INTERNAL_MUL
+#if 0
+    static uint64_t imulq_low(uint64_t rax, uint64_t operand);
+        __asm__ (".globl imulq_low; imulq_low:");
+        __asm__ ("xorq %rdx, %rdx;");
+        __asm__ ("movq %rdi, %rax;");
+        __asm__ ("movq %rsi, %rcx;");
+        __asm__ ("imulq %rcx;");
+        __asm__ ("retq;");
+
+    static uint64_t imulq_high(uint64_t rax, uint64_t operand);
+        __asm__ (".globl imulq_high; imulq_high:");
+        __asm__ ("xorq %rdx, %rdx;");
+        __asm__ ("movq %rdi, %rax;");
+        __asm__ ("movq %rsi, %rcx;");
+        __asm__ ("imulq %rcx;");
+        __asm__ ("movq %rdx, %rax;");
+        __asm__ ("retq;");
+#endif
+    uint64_t mulq_low(uint64_t rax, uint64_t operand);
+        __asm__ (".globl mulq_low; mulq_low:");
+        __asm__ ("xorq %rdx, %rdx;");
+        __asm__ ("movq %rdi, %rax;");
+        __asm__ ("movq %rsi, %rcx;");
+        __asm__ ("mulq %rcx;");
+        __asm__ ("retq;");
+
+    uint64_t mulq_high(uint64_t rax, uint64_t operand);
+        __asm__ (".globl mulq_high; mulq_high:");
+        __asm__ ("xorq %rdx, %rdx;");
+        __asm__ ("movq %rdi, %rax;");
+        __asm__ ("movq %rsi, %rcx;");
+        __asm__ ("mulq %rcx;");
+        __asm__ ("movq %rdx, %rax;");
+        __asm__ ("retq;");
+#endif
+
+    static uint64_t Z3_internal_eval(Z3_context ctx, Z3_ast query, uint64_t* data, size_t size) {
+#if 0
+        printf("Internal eval Z3\n");
+        print_z3_original(ctx, query);
+#endif
         uint64_t       res;
-        Z3_sort        sort = Z3_mk_bv_sort(ctx, 8);
+        Z3_sort        sort = Z3_mk_bv_sort(ctx, 64); // we are ignoring the real sort size
         Z3_model       z3_m = Z3_mk_model(ctx);
         Z3_model_inc_ref(ctx, z3_m);
-        Z3_ast z3_vals[size];
+        Z3_ast* z3_vals = (Z3_ast*) malloc(sizeof(Z3_ast) * size);
 
         unsigned i;
         for (i = 0; i < size; ++i) {
@@ -439,13 +506,9 @@ static cache_t cache;
 
         for (i = 0; i < size; ++i)
             Z3_dec_ref(ctx, z3_vals[i]);
-        return res;
-    }
+        free(z3_vals);
 
-    static void print_z3_original(Z3_context ctx, Z3_ast e) {
-        Z3_set_ast_print_mode(ctx, Z3_PRINT_LOW_LEVEL);
-        const char* z3_query_str = Z3_ast_to_string(ctx, e);
-        printf("\n%s\n", z3_query_str);
+        return res;
     }
 
     struct eval_frame {
@@ -469,7 +532,7 @@ static cache_t cache;
 
     static svector<eval_frame> m_frame_stack;
 
-    static uint64_t Z3_custom_eval_internal_iter(Z3_context c, Z3_ast _expr, uint8_t* data, size_t data_size) {
+    static uint64_t Z3_custom_eval_internal_iter(Z3_context c, Z3_ast _expr, uint64_t* data, size_t data_size) {
 
         uint64_t res; // hold the result from last iteration
 
@@ -857,7 +920,7 @@ static cache_t cache;
         return res;
     }
 
-    static uint64_t Z3_custom_eval_internal(Z3_context c, Z3_ast _expr, uint8_t* data, size_t data_size) {
+    static uint64_t Z3_custom_eval_internal(Z3_context c, Z3_ast _expr, uint64_t* data, size_t data_size) {
 
         //print_z3_original(c, _expr);
 
@@ -869,21 +932,6 @@ static cache_t cache;
         }
 #endif
 
-#if 0
-        ast * _a = to_expr(expr);
-        if (is_numeral_sort(c, of_sort(mk_c(c)->m().get_sort(to_expr(_a))))
-                && mk_c(c)->m().is_unique_value(to_expr(_a))) {
-
-            rational val     = _decl->get_parameter(0).get_rational();
-            // unsigned bv_size = decl->get_parameter(1).get_int();
-            return val.get_uint64();
-        }
-
-        if (_d == nullptr) {
-            int    symbol_index = _d->get_name().get_num();
-            return data[symbol_index];
-        }
-#endif
         register func_decl* _d      = APP(_expr)->get_decl();
         register func_decl_info*  _info = _d->get_info();
 
@@ -904,7 +952,7 @@ static cache_t cache;
         register decl_kind _decl_kind = _info->get_decl_kind();
 
 #undef ARGS
-#define ARGS()              (APP(_expr)->get_args())
+#define ARGS(e)              (APP(e)->get_args())
 #define EVAL_ARG(args, i)   Z3_custom_eval_internal(c, of_ast(args[i]), data, data_size)
 
         register uint64_t arg2;
@@ -927,14 +975,14 @@ static cache_t cache;
                     return 0;
                 }
                 case OP_BNEG: {
-                    arg1 = -EVAL_ARG(ARGS(), 0);
+                    arg1 = -EVAL_ARG(ARGS(_expr), 0);
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
 #endif
                     return arg1;
                 }
                 case OP_BADD: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     unsigned n_args = APP(_expr)->get_num_args();
                     size_t i = 1;
                     arg1 = EVAL_ARG(args, 0);
@@ -949,7 +997,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BSUB: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     //printf("BSUB arg1=%lx arg2=%lx size=%u mask=%lx\n", arg1, arg2, SIZE(expr), MASK(SIZE(expr)));
@@ -960,7 +1008,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BMUL: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     unsigned n_args = APP(_expr)->get_num_args();
                     size_t i = 1;
                     arg1 = EVAL_ARG(args, 0);
@@ -975,7 +1023,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BSDIV: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     if (arg2 == 0)
@@ -987,7 +1035,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BUDIV: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     if (arg2 == 0)
@@ -999,7 +1047,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BSREM: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     if (arg2 == 0)
@@ -1011,7 +1059,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BUREM: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     if (arg2 == 0)
@@ -1031,7 +1079,7 @@ static cache_t cache;
                 case OP_BSMOD0: return Z3_OP_BSMOD0;
 #endif
                 case OP_ULEQ: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     arg1 = (arg1 <= arg2);
@@ -1041,7 +1089,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_SLEQ: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     OPERATION(arg1, arg2, SIZE(args[0]), <=, arg1);
@@ -1051,7 +1099,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_UGEQ: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     arg1 = (arg1 >= arg2);
@@ -1061,7 +1109,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_SGEQ: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     OPERATION(arg1, arg2, SIZE(args[0]), >=, arg1);
@@ -1071,7 +1119,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_ULT:{
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     arg1 = (arg1 < arg2);
@@ -1081,7 +1129,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_SLT: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     OPERATION(arg1, arg2, SIZE(args[0]), <, arg1);
@@ -1091,7 +1139,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_UGT:{
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     arg1 = (arg1 > arg2);
@@ -1101,7 +1149,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_SGT: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     OPERATION(arg1, arg2, SIZE(args[0]), >, arg1);
@@ -1111,7 +1159,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BAND:  {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     unsigned n_args = APP(_expr)->get_num_args();
                     size_t i = 1;
                     arg1 = EVAL_ARG(args, 0);
@@ -1127,7 +1175,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BOR: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     unsigned n_args = APP(_expr)->get_num_args();
                     size_t i = 1;
                     arg1 = EVAL_ARG(args, 0);
@@ -1143,7 +1191,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BNOT: {
-                    arg1 = EVAL_ARG(ARGS(), 0);
+                    arg1 = EVAL_ARG(ARGS(_expr), 0);
                     arg1 = (~arg1) & MASK(SIZE(_expr));
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
@@ -1151,7 +1199,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BXOR: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     unsigned n_args = APP(_expr)->get_num_args();
                     size_t i = 1;
                     arg1 = EVAL_ARG(args, 0);
@@ -1172,7 +1220,7 @@ static cache_t cache;
                 case OP_BXNOR:    return Z3_OP_BXNOR;
 #endif
                 case OP_CONCAT: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     register unsigned n_args = APP(_expr)->get_num_args();
                     register unsigned size = 0;
                     register int i = n_args - 1;
@@ -1191,7 +1239,7 @@ static cache_t cache;
                 }
                 case OP_SIGN_EXT: {
                     register int n_bits = _info->get_parameters()[0].get_int();
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     if  (arg1 & (1 << (SIZE(args[0]) - 1))) {
                         arg1 |= MASK(n_bits) << SIZE(args[0]);
@@ -1202,16 +1250,100 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_ZERO_EXT: {
-                    arg1 = EVAL_ARG(ARGS(), 0);
+                    arg1 = EVAL_ARG(ARGS(_expr), 0);
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
 #endif
                     return arg1;
                 }
                 case OP_EXTRACT: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
 
                     if (SIZE(args[0]) > 64) {
+#if INTERNAL_MUL || INTERNAL_DIV
+                        register decl_kind child_opkind = OP(args[0]);
+#endif
+#if INTERNAL_MUL
+                        if (child_opkind == OP_BMUL) {
+                            register expr * const * child_args = ARGS(args[0]);
+                            register expr * const * child_args_0 = ARGS(child_args[0]);
+                            register expr * const * child_args_1 = ARGS(child_args[1]);
+                            if (OP(child_args[0]) == OP_ZERO_EXT
+                                    && OP(child_args[1]) == OP_ZERO_EXT
+                                    && SIZE(child_args_0[0]) == 64
+                                    && SIZE(child_args_1[0]) == 64) {
+                                register const parameter* params = _info->get_parameters();
+                                register int high = params[0].get_int();
+                                register int low = params[1].get_int();
+                                if (high == 127 && low == 64) {
+                                    arg1 = EVAL_ARG(child_args_0, 0);
+                                    arg2 = EVAL_ARG(child_args_1, 0);
+                                    arg1 = mulq_high(arg1, arg2);
+#if USE_CACHE
+                                    cache.insert(expr_id, arg1);
+#endif
+                                    return arg1;
+                                } else if (high == 63 && low == 0) {
+                                    arg1 = EVAL_ARG(child_args_0, 0);
+                                    arg2 = EVAL_ARG(child_args_1, 0);
+                                    arg1 = mulq_low(arg1, arg2);
+#if USE_CACHE
+                                    cache.insert(expr_id, arg1);
+#endif
+                                    return arg1;
+                                }
+                            }
+                        }
+#endif
+
+#if INTERNAL_DIV
+                        if (child_opkind == OP_BUDIV || child_opkind == OP_BSDIV) {
+                            register const parameter* params = _info->get_parameters();
+                            register int high = params[0].get_int();
+                            register int low = params[1].get_int();
+                            register expr * const * child_args = ARGS(args[0]);
+                            register expr * const * child_args_0 = ARGS(child_args[0]);
+                            register expr * const * child_args_1 = ARGS(child_args[1]);
+
+                            if (high == 63 && low == 0 && SIZE(child_args_0[0]) == 64) {
+
+                                int error = 0;
+                                uint64_t rdx;
+                                uint64_t rax;
+                                uint64_t operand;
+
+                                if (OP(child_args[0]) == OP_ZERO_EXT) {
+                                    rdx = 0;
+                                    rax = EVAL_ARG(child_args_0, 0);
+                                } else if (OP(child_args[0]) == OP_CONCAT
+                                        && OP(child_args_0[0]) == OP_BV_NUM) {
+                                    rdx = 0; // we are assming is zero...
+                                    rax = EVAL_ARG(child_args_0, 1);
+                                } else {
+                                    error = 1;
+                                }
+
+                                if (OP(child_args[1]) == OP_ZERO_EXT) {
+                                    operand = EVAL_ARG(child_args_1, 0);
+                                } else if (OP(child_args[1]) == OP_CONCAT
+                                        && OP(child_args_1[0]) == OP_BV_NUM) {
+                                    operand = EVAL_ARG(child_args_1, 1);
+                                } else {
+                                    error = 1;
+                                }
+
+                                if (!error) {
+                                    arg1 = child_opkind == OP_BSDIV ?
+                                        idivq(rdx, rax, operand) : divq(rdx, rax, operand);
+#if USE_CACHE
+                                    cache.insert(expr_id, arg1);
+#endif
+                                    return arg1;
+                                }
+                            }
+                        }
+#endif
+
                         arg1 = Z3_internal_eval(c, _expr, data, data_size);
 #if USE_CACHE
                         cache.insert(expr_id, arg1);
@@ -1236,7 +1368,7 @@ static cache_t cache;
                 case OP_BCOMP:        return Z3_OP_BCOMP;
 #endif
                 case OP_BSHL: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     arg1 = (arg1 << arg2) & MASK(SIZE(_expr));
@@ -1246,7 +1378,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BLSHR: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     arg1 = (arg1 >> arg2) & MASK(SIZE(_expr));
@@ -1256,7 +1388,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BASHR: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     OPERATION(arg1, arg2, SIZE(_expr), >>, arg1);
@@ -1280,7 +1412,7 @@ static cache_t cache;
                 case OP_BSMUL_NO_UDFL: return Z3_OP_BSMUL_NO_UDFL;
 #endif
                 case OP_BSDIV_I:  {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     if (arg2 == 0)
@@ -1292,7 +1424,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BUDIV_I: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     if (arg2 == 0)
@@ -1304,7 +1436,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BSREM_I:  {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     if (arg2 == 0)
@@ -1316,7 +1448,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_BUREM_I: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     if (arg2 == 0)
@@ -1343,7 +1475,7 @@ static cache_t cache;
                     return 0;
                 }
                 case OP_EQ: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     if (!IS_BOOL(args[0]) && SIZE(args[0]) > 64) {
                         arg1 = Z3_internal_eval(c, _expr, data, data_size);
 #if USE_CACHE
@@ -1358,7 +1490,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_ITE: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     if (EVAL_ARG(args, 0)) {
                         arg1 = EVAL_ARG(args, 1);
                     } else {
@@ -1370,7 +1502,7 @@ static cache_t cache;
                     return arg1;
                 }
                 case OP_AND: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     unsigned n_args = APP(_expr)->get_num_args();
                     size_t i = 0;
                     do {
@@ -1388,7 +1520,7 @@ static cache_t cache;
                     return 1;
                 }
                 case OP_OR: {
-                    register expr * const * args = ARGS();
+                    register expr * const * args = ARGS(_expr);
                     unsigned n_args = APP(_expr)->get_num_args();
                     size_t i = 0;
                     do {
@@ -1406,7 +1538,7 @@ static cache_t cache;
                     return 0;
                 }
                 case OP_NOT: {
-                    arg1 = !EVAL_ARG(ARGS(), 0);
+                    arg1 = !EVAL_ARG(ARGS(_expr), 0);
 #if USE_CACHE
                     cache.insert(expr_id, arg1);
 #endif
@@ -1437,7 +1569,7 @@ static cache_t cache;
         return arg1;
     }
 
-    uint64_t Z3_API Z3_custom_eval(Z3_context c, Z3_ast expr, uint8_t* data, size_t data_size) {
+    uint64_t Z3_API Z3_custom_eval(Z3_context c, Z3_ast expr, uint64_t* data, size_t data_size) {
 #if ITERATIVE_EVAL
         uint64_t res = Z3_custom_eval_internal_iter(c, expr, data, data_size);
 #else
