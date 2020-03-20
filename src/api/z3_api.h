@@ -4642,7 +4642,14 @@ extern "C" {
     */
     Z3_ast_kind Z3_API Z3_get_ast_kind(Z3_context c, Z3_ast a);
 
-    uint64_t Z3_API Z3_custom_eval(Z3_context c, Z3_ast e, uint64_t* data, size_t data_size);
+    /**
+       \brief Custom eval Z3 AST.
+    */
+    uint64_t Z3_API Z3_custom_eval(Z3_context c,
+                                    Z3_ast e,
+                                    uint64_t* data,
+                                    uint8_t* symbol_sizes,
+                                    size_t size);
 
     /**
       def_API('Z3_is_app', BOOL, (_in(CONTEXT), _in(AST)))

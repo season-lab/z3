@@ -383,6 +383,8 @@ static cache_t cache;
 #define IS_BOOL(e)  ((mk_c(c)->m().get_sort(to_expr(e)))->get_num_parameters() == 0)
 #define ARGS(e)     (APP(of_expr(e))->get_args())
 #define OP(e)       (to_app(e)->get_decl()->get_info()->get_decl_kind())
+
+// ToDo: we could do it with a simple sign extend
 #define OPERATION(a, b, size, operator, res)                                    \
     switch (size) {                                                             \
         case 8:                                                                 \
@@ -462,19 +464,19 @@ static cache_t cache;
         __asm__ ("retq;");
 #endif
 
-    static uint64_t Z3_internal_eval(Z3_context ctx, Z3_ast query, uint64_t* data, size_t size) {
+    static uint64_t Z3_internal_eval(Z3_context ctx, Z3_ast query, uint64_t* data, uint8_t* symbols_sizes, size_t size) {
 #if 0
         printf("Internal eval Z3\n");
         print_z3_original(ctx, query);
 #endif
         uint64_t       res;
-        Z3_sort        sort = Z3_mk_bv_sort(ctx, 64); // we are ignoring the real sort size
         Z3_model       z3_m = Z3_mk_model(ctx);
         Z3_model_inc_ref(ctx, z3_m);
         Z3_ast* z3_vals = (Z3_ast*) malloc(sizeof(Z3_ast) * size);
 
         unsigned i;
         for (i = 0; i < size; ++i) {
+            Z3_sort sort = Z3_mk_bv_sort(ctx, symbols_sizes[i]);
             Z3_ast e = Z3_mk_unsigned_int64(ctx, data[i], sort);
             Z3_inc_ref(ctx, e);
             Z3_symbol s = Z3_mk_int_symbol(ctx, i);
@@ -532,7 +534,7 @@ static cache_t cache;
 
     static svector<eval_frame> m_frame_stack;
 
-    static uint64_t Z3_custom_eval_internal_iter(Z3_context c, Z3_ast _expr, uint64_t* data, size_t data_size) {
+    static uint64_t Z3_custom_eval_internal_iter(Z3_context c, Z3_ast _expr, uint64_t* data, uint8_t* symbols_sizes, size_t data_size) {
 
         uint64_t res; // hold the result from last iteration
 
@@ -557,7 +559,7 @@ static cache_t cache;
             if (f.m_info == nullptr) {
                 int    symbol_index = f.m_decl->get_name().get_num();
                 // printf("INPUT[%d] = %x\n", symbol_index, data[symbol_index]);
-                res = data[symbol_index];
+                res = data[symbol_index] & MASK(SIZE(APP(f.m_curr)));
 #if USE_CACHE
                 cache.insert(f.m_id, res);
 #endif
@@ -890,7 +892,7 @@ static cache_t cache;
 #endif
 
                 if (!IS_BOOL(arg) && SIZE(arg) > 64) { // fallback to Z3
-                    res = Z3_internal_eval(c, of_ast(f.m_curr), data, data_size);
+                    res = Z3_internal_eval(c, of_ast(f.m_curr), data, symbols_sizes, data_size);
 #if USE_CACHE
                     cache.insert(f.m_id, res);
 #endif
@@ -904,7 +906,7 @@ static cache_t cache;
                 continue;
             }
 #if 0
-            uint64_t res_z3 = Z3_internal_eval(c, of_ast(f.m_curr), data, data_size);
+            uint64_t res_z3 = Z3_internal_eval(c, of_ast(f.m_curr), data, symbols_sizes, data_size);
             if (res != res_z3) {
                 print_z3_original(c, of_ast(f.m_curr));
                 return 0;
@@ -920,7 +922,7 @@ static cache_t cache;
         return res;
     }
 
-    static uint64_t Z3_custom_eval_internal(Z3_context c, Z3_ast _expr, uint64_t* data, size_t data_size) {
+    static uint64_t Z3_custom_eval_internal(Z3_context c, Z3_ast _expr, uint64_t* data, uint8_t* symbols_sizes, size_t data_size) {
 
         //print_z3_original(c, _expr);
 
@@ -941,7 +943,7 @@ static cache_t cache;
             //    ERROR("Invalid index");
             //}
             //printf("INPUT[%d]: %x\n", symbol_index, data[symbol_index]);
-            arg1 = data[symbol_index];
+            arg1 = data[symbol_index] & MASK(SIZE(_expr));
 #if USE_CACHE
             cache.insert(expr_id, arg1);
 #endif
@@ -953,7 +955,7 @@ static cache_t cache;
 
 #undef ARGS
 #define ARGS(e)              (APP(e)->get_args())
-#define EVAL_ARG(args, i)   Z3_custom_eval_internal(c, of_ast(args[i]), data, data_size)
+#define EVAL_ARG(args, i)   Z3_custom_eval_internal(c, of_ast(args[i]), data, symbols_sizes, data_size)
 
         register uint64_t arg2;
         if (0x6 == fid) { // mk_c(c)->get_bv_fid()
@@ -1344,7 +1346,7 @@ static cache_t cache;
                         }
 #endif
 
-                        arg1 = Z3_internal_eval(c, _expr, data, data_size);
+                        arg1 = Z3_internal_eval(c, _expr, data, symbols_sizes, data_size);
 #if USE_CACHE
                         cache.insert(expr_id, arg1);
 #endif
@@ -1477,7 +1479,7 @@ static cache_t cache;
                 case OP_EQ: {
                     register expr * const * args = ARGS(_expr);
                     if (!IS_BOOL(args[0]) && SIZE(args[0]) > 64) {
-                        arg1 = Z3_internal_eval(c, _expr, data, data_size);
+                        arg1 = Z3_internal_eval(c, _expr, data, symbols_sizes, data_size);
 #if USE_CACHE
                         cache.insert(expr_id, arg1);
 #endif
@@ -1569,11 +1571,11 @@ static cache_t cache;
         return arg1;
     }
 
-    uint64_t Z3_API Z3_custom_eval(Z3_context c, Z3_ast expr, uint64_t* data, size_t data_size) {
+    uint64_t Z3_API Z3_custom_eval(Z3_context c, Z3_ast expr, uint64_t* data, uint8_t* symbols_sizes, size_t data_size) {
 #if ITERATIVE_EVAL
-        uint64_t res = Z3_custom_eval_internal_iter(c, expr, data, data_size);
+        uint64_t res = Z3_custom_eval_internal_iter(c, expr, data, symbols_sizes, data_size);
 #else
-        uint64_t res = Z3_custom_eval_internal(c, expr, data, data_size);
+        uint64_t res = Z3_custom_eval_internal(c, expr, data, symbols_sizes, data_size);
 #endif
 #if USE_CACHE
         cache.reset();
