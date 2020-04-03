@@ -360,6 +360,8 @@ extern "C" {
 #define INTERNAL_DIV    0
 #define INTERNAL_MUL    0
 
+#include <stdlib.h>
+
 #if USE_CACHE
 #include "util/chashtable.h"
 #include "util/vector.h"
@@ -376,7 +378,7 @@ typedef cmap<uint64_t, uint64_t, cache_hash, cache_eq > cache_t;
 static cache_t cache;
 #endif
 
-#define ERROR(M)    notify_assertion_violation(__FILE__, __LINE__, #M);
+#define ERROR(M)    do { notify_assertion_violation(__FILE__, __LINE__, #M); exit(1); } while (0);
 #define APP(e)      reinterpret_cast<app*>(e)
 #define MASK(s)     ((2LU << ((s) - 1LU)) - 1LU)
 #define SIZE(e)     (mk_c(c)->m().get_sort(to_expr(e)))->get_parameter(0).get_int()
@@ -421,18 +423,26 @@ static cache_t cache;
 #if INTERNAL_DIV
     uint64_t idivq(uint64_t rdx, uint64_t rax, uint64_t operand);
         __asm__ (".globl idivq; idivq:");
+        __asm__ ("testq %rdx, %rdx;");
+        __asm__ ("jz E;");
         __asm__ ("movq %rdx, %rcx;");
         __asm__ ("movq %rdi, %rdx;");
         __asm__ ("movq %rsi, %rax;");
         __asm__ ("idivq %rcx;");
         __asm__ ("retq;");
+        __asm__ ("E: movq $-1, %rax;");
+        __asm__ ("retq;");
 
     uint64_t divq(uint64_t rdx, uint64_t rax, uint64_t operand);
         __asm__ (".globl divq; divq:");
+        __asm__ ("testq %rdx, %rdx;");
+        __asm__ ("jz E2;");
         __asm__ ("movq %rdx, %rcx;");
         __asm__ ("movq %rdi, %rdx;");
         __asm__ ("movq %rsi, %rax;");
         __asm__ ("divq %rcx;");
+        __asm__ ("retq;");
+        __asm__ ("E2: movq $-1, %rax;");
         __asm__ ("retq;");
 #endif
 
@@ -485,6 +495,13 @@ static cache_t cache;
 
         unsigned i;
         for (i = 0; i < size; ++i) {
+#if 0
+            printf("Index=%u size=%u\n", i, symbols_sizes[i]);
+            if (symbols_sizes[i] == 0) {
+                printf("index=%d size=%lu\n", i, size);
+                ERROR("Invalid size");
+            }
+#endif
             Z3_sort sort = Z3_mk_bv_sort(ctx, symbols_sizes[i]);
             Z3_ast e = Z3_mk_unsigned_int64(ctx, data[i], sort);
             Z3_inc_ref(ctx, e);
@@ -933,7 +950,7 @@ static cache_t cache;
 
     static uint64_t Z3_custom_eval_internal(Z3_context c, Z3_ast _expr, uint64_t* data, uint8_t* symbols_sizes, size_t data_size) {
 
-        //print_z3_original(c, _expr);
+        // print_z3_original(c, _expr);
 
         uint64_t arg1;
 #if USE_CACHE
@@ -948,9 +965,17 @@ static cache_t cache;
 
         if (_info == nullptr) {
             int    symbol_index = _d->get_name().get_num();
-            //if(symbol_index < 0 || symbol_index >= data_size) {
-            //    ERROR("Invalid index");
-            //}
+#if 0
+            if(symbol_index < 0 || symbol_index >= data_size) {
+                print_z3_original(c, _expr);
+                printf("index=%d size=%lu\n", symbol_index, data_size);
+                ERROR("Invalid index");
+            }
+            if (SIZE(_expr) == 0) {
+                printf("index=%d size=%lu\n", symbol_index, data_size);
+                ERROR("Invalid size");
+            } 
+#endif
             //printf("INPUT[%d]: %x\n", symbol_index, data[symbol_index]);
             arg1 = data[symbol_index] & MASK(SIZE(_expr));
 #if USE_CACHE
@@ -1474,6 +1499,7 @@ static cache_t cache;
                 case OP_BSMOD_I: return Z3_OP_BSMOD_I;
 #endif
                 default:
+                    print_z3_original(c, _expr);
                     ERROR("Unknown BV operator");
             }
 
@@ -1555,32 +1581,67 @@ static cache_t cache;
 #endif
                     return arg1;
                 }
+                default: {
+                    print_z3_original(c, _expr);
+                    ERROR("Unknown BASE operator");
+                }
             }
-        }
 
-        ERROR("Unknown operator");
+        }
 #if 0
-        } else if (mk_c(c)->get_arith_fid() == fid) {
+        else if (mk_c(c)->get_arith_fid() == fid) {
             switch (_decl_kind) {
-                case OP_LE: {
-                    return EVAL_ARG(0) <= EVAL_ARG(1);
-                }
-                case OP_GE: {
-                    return EVAL_ARG(0) >= EVAL_ARG(1);
-                }
-                case OP_LT: {
-                    return EVAL_ARG(0) < EVAL_ARG(1);
-                }
-                case OP_GT: {
-                    return EVAL_ARG(0) > EVAL_ARG(1);
+                case OP_NUM: {}
+#if 0
+                case OP_IRRATIONAL_ALGEBRAIC_NUM: return Z3_OP_AGNUM;
+                case OP_LE: return Z3_OP_LE;
+                case OP_GE: return Z3_OP_GE;
+                case OP_LT: return Z3_OP_LT;
+                case OP_GT: return Z3_OP_GT;
+                case OP_ADD: return Z3_OP_ADD;
+                case OP_SUB: return Z3_OP_SUB;
+                case OP_UMINUS: return Z3_OP_UMINUS;
+                case OP_MUL: return Z3_OP_MUL;
+                case OP_DIV: return Z3_OP_DIV;
+                case OP_IDIV: return Z3_OP_IDIV;
+                case OP_REM: return Z3_OP_REM;
+                case OP_MOD: return Z3_OP_MOD;
+                case OP_POWER: return Z3_OP_POWER;
+                case OP_TO_REAL: return Z3_OP_TO_REAL;
+                case OP_TO_INT: return Z3_OP_TO_INT;
+                case OP_IS_INT: return Z3_OP_IS_INT;
+#endif
+                default: {
+                    print_z3_original(c, _expr);
+                    ERROR("Unknown ARITH operator");
                 }
             }
         }
 #endif
-        return arg1;
+#if 0
+        printf("basic: %d\n", mk_c(c)->get_basic_fid());
+        printf("dt: %d\n", mk_c(c)->get_dt_fid());
+        printf("arith: %d\n", mk_c(c)->get_arith_fid());
+        printf("array: %d\n", mk_c(c)->get_array_fid());
+        printf("pb: %d\n", mk_c(c)->get_pb_fid());
+        printf("datalog: %d\n", mk_c(c)->get_datalog_fid());
+        printf("fpa: %d\n", mk_c(c)->get_fpa_fid());
+        printf("seq: %d\n", mk_c(c)->get_seq_fid());
+#endif
+        print_z3_original(c, _expr);
+        printf("_decl_kind: %d fid=%d\n", _decl_kind, fid);
+        ERROR("Unknown operator");
     }
 
     uint64_t Z3_API Z3_custom_eval(Z3_context c, Z3_ast expr, uint64_t* data, uint8_t* symbols_sizes, size_t data_size) {
+#if 0
+        for (size_t i = 0; i < data_size; i++) {
+            if (symbols_sizes[i] == 0) {
+                printf("index=%lu size=%lu addr=%p\n", i, data_size, symbols_sizes);
+                ERROR("Invalid size");
+            }
+        }
+#endif
 #if ITERATIVE_EVAL
         uint64_t res = Z3_custom_eval_internal_iter(c, expr, data, symbols_sizes, data_size);
 #else
