@@ -400,7 +400,16 @@ static cache_t cache;
             res = ((unsigned long)((int64_t)a operator(int64_t) b)) & MASK(64); \
             break;                                                              \
         default:                                                                \
-            ERROR("unexpected size [signed operation]");                        \
+            if (size < 64) {                                                    \
+                unsigned long sign_bit = 1UL << (size - 1);                     \
+                if (a & sign_bit)                                               \
+                    a |= MASK(64 - size) << size;                               \
+                if (b & sign_bit)                                               \
+                    b |= MASK(64 - size) << size;                               \
+                res = (uint64_t)((int64_t)a operator (int64_t)b);               \
+                res &= MASK(size);                                              \
+            } else                                                              \
+                ERROR("unexpected size [signed operation]");                    \
     }
 
     static void print_z3_original(Z3_context ctx, Z3_ast e) {
