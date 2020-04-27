@@ -1437,7 +1437,7 @@ static cache_t cache;
                 case OP_ROTATE_LEFT: {
                     register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
-                    arg2 = EVAL_ARG(args, 1);
+                    arg2 = _info->get_parameters()[0].get_int();
                     switch (SIZE(_expr)) {
                         case 8:
                             arg1 = __rolb(arg1, arg2);
@@ -1462,7 +1462,7 @@ static cache_t cache;
                 case OP_ROTATE_RIGHT: {
                     register expr * const * args = ARGS(_expr);
                     arg1 = EVAL_ARG(args, 0);
-                    arg2 = EVAL_ARG(args, 1);
+                    arg2 = _info->get_parameters()[0].get_int();
                     switch (SIZE(_expr)) {
                         case 8:
                             arg1 = __rorb(arg1, arg2);
