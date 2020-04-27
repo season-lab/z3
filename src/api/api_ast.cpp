@@ -361,6 +361,7 @@ extern "C" {
 #define INTERNAL_MUL    0
 
 #include <stdlib.h>
+#include <x86intrin.h>
 
 #if USE_CACHE
 #include "util/chashtable.h"
@@ -1433,9 +1434,57 @@ static cache_t cache;
 #endif
                     return arg1;
                 }
+                case OP_ROTATE_LEFT: {
+                    register expr * const * args = ARGS(_expr);
+                    arg1 = EVAL_ARG(args, 0);
+                    arg2 = EVAL_ARG(args, 1);
+                    switch (SIZE(_expr)) {
+                        case 8:
+                            arg1 = __rolb(arg1, arg2);
+                            break;
+                        case 16:
+                            arg1 = __rolw(arg1, arg2);
+                            break;
+                        case 32:
+                            arg1 = __rold(arg1, arg2);
+                            break;
+                        case 64:
+                            arg1 = __rolq(arg1, arg2);
+                            break;
+                        default:
+                            ERROR("unexpected size");
+                    }
+#if USE_CACHE
+                    cache.insert(expr_id, arg1);
+#endif
+                    return arg1;
+                }
+                case OP_ROTATE_RIGHT: {
+                    register expr * const * args = ARGS(_expr);
+                    arg1 = EVAL_ARG(args, 0);
+                    arg2 = EVAL_ARG(args, 1);
+                    switch (SIZE(_expr)) {
+                        case 8:
+                            arg1 = __rorb(arg1, arg2);
+                            break;
+                        case 16:
+                            arg1 = __rorw(arg1, arg2);
+                            break;
+                        case 32:
+                            arg1 = __rord(arg1, arg2);
+                            break;
+                        case 64:
+                            arg1 = __rorq(arg1, arg2);
+                            break;
+                        default:
+                            ERROR("unexpected size");
+                    }
+#if USE_CACHE
+                    cache.insert(expr_id, arg1);
+#endif
+                    return arg1;
+                }
 #if 0
-                case OP_ROTATE_LEFT:  return Z3_OP_ROTATE_LEFT;
-                case OP_ROTATE_RIGHT: return Z3_OP_ROTATE_RIGHT;
                 case OP_EXT_ROTATE_LEFT:  return Z3_OP_EXT_ROTATE_LEFT;
                 case OP_EXT_ROTATE_RIGHT: return Z3_OP_EXT_ROTATE_RIGHT;
                 case OP_INT2BV:    return Z3_OP_INT2BV;
