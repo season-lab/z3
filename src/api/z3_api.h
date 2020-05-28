@@ -4652,6 +4652,16 @@ extern "C" {
                                     size_t size);
 
     /**
+       \brief Custom eval Z3 AST with depth
+    */
+    uint64_t Z3_API Z3_custom_eval_depth(Z3_context c,
+                                          Z3_ast e,
+                                          uint64_t* data,
+                                          uint8_t* symbols_sizes,
+                                          size_t data_size,
+                                          uint32_t* depth);
+
+    /**
       def_API('Z3_is_app', BOOL, (_in(CONTEXT), _in(AST)))
     */
     bool Z3_API Z3_is_app(Z3_context c, Z3_ast a);

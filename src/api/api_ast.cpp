@@ -1702,6 +1702,42 @@ static cache_t cache;
         return res;
     }
 
+    uint64_t Z3_API Z3_custom_eval_depth(Z3_context c, Z3_ast _expr, uint64_t* data, uint8_t* symbols_sizes, size_t data_size, uint32_t* depth) {
+        if (depth == nullptr)
+            return Z3_custom_eval(c, _expr, data, symbols_sizes, data_size);
+
+        *depth = 0;
+
+        func_decl*      _d    = APP(_expr)->get_decl();
+        func_decl_info* _info = _d->get_info();
+        if (_info == nullptr)
+            return Z3_custom_eval(c, _expr, data, symbols_sizes, data_size);
+
+        family_id fid        = _info->get_family_id();
+        decl_kind _decl_kind = _info->get_decl_kind();
+        if (0x0 != fid || _decl_kind != OP_AND)
+            return Z3_custom_eval(c, _expr, data, symbols_sizes, data_size);
+
+        expr * const * args = APP(_expr)->get_args();
+        unsigned n_args     = APP(_expr)->get_num_args();
+
+        uint64_t res = 1;
+        size_t   i   = 0;
+        do {
+            uint64_t arg1 = Z3_custom_eval_internal(c, of_ast(args[i]), data, symbols_sizes, data_size);
+            if (!arg1) {
+                res = 0;
+                break;
+            } else
+                (*depth)++;
+        } while (++i < n_args);
+
+#if USE_CACHE
+        cache.reset();
+#endif
+        return res;
+    }
+
     Z3_ast_kind Z3_API Z3_get_ast_kind(Z3_context c, Z3_ast a) {
         Z3_TRY;
         LOG_Z3_get_ast_kind(c, a);
