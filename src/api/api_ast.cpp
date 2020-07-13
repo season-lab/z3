@@ -484,6 +484,10 @@ static cache_t cache;
         __asm__ ("retq;");
 #endif
 
+    static Z3_func_decl* fdecl_cache  = NULL;
+    static size_t fdecl_cache_size    = 0;
+    static Z3_ast byte_val_cache[256] = {0};
+
     static uint64_t Z3_internal_eval(Z3_context ctx, Z3_ast query, uint64_t* data, uint8_t* symbols_sizes, size_t size) {
 #if 0
         printf("Internal eval Z3\n");
@@ -492,7 +496,18 @@ static cache_t cache;
         uint64_t       res;
         Z3_model       z3_m = Z3_mk_model(ctx);
         Z3_model_inc_ref(ctx, z3_m);
-        Z3_ast* z3_vals = (Z3_ast*) malloc(sizeof(Z3_ast) * size);
+        Z3_ast* z3_vals = (Z3_ast*) calloc(sizeof(Z3_ast), size);
+
+        if (fdecl_cache == NULL) {
+            fdecl_cache = (Z3_func_decl*)calloc(sizeof(Z3_func_decl), size);
+            fdecl_cache_size = size;
+        } else if (fdecl_cache_size < size) {
+            fdecl_cache = (Z3_func_decl*)realloc(fdecl_cache, size);
+            size_t i;
+            for (i = fdecl_cache_size; i < size; ++i)
+                fdecl_cache[i] = 0;
+            fdecl_cache_size = size;
+        }
 
         unsigned i;
         for (i = 0; i < size; ++i) {
@@ -503,14 +518,30 @@ static cache_t cache;
                 ERROR("Invalid size");
             }
 #endif
-            Z3_sort sort = Z3_mk_bv_sort(ctx, symbols_sizes[i]);
-            Z3_ast e = Z3_mk_unsigned_int64(ctx, data[i], sort);
-            Z3_inc_ref(ctx, e);
-            Z3_symbol s = Z3_mk_int_symbol(ctx, i);
-            Z3_func_decl decl  = Z3_mk_func_decl(ctx, s, 0, NULL, sort);
-            Z3_add_const_interp(ctx, z3_m, decl, e);
+            Z3_ast e;
+            if (symbols_sizes[i] == 8 && byte_val_cache[data[i]] != NULL)
+                e = byte_val_cache[data[i] & 0xff];
+            else {
+                Z3_sort sort = Z3_mk_bv_sort(ctx, symbols_sizes[i]);
+                e = Z3_mk_unsigned_int64(ctx, data[i], sort);
+                Z3_inc_ref(ctx, e);
+                if (symbols_sizes[i] == 8)
+                    byte_val_cache[data[i] & 0xff] = e;
+                else
+                    z3_vals[i] = e;
+            }
 
-            z3_vals[i] = e;
+            Z3_func_decl decl;
+            if (fdecl_cache[i] != NULL)
+                decl = fdecl_cache[i];
+            else {
+                Z3_sort sort   = Z3_mk_bv_sort(ctx, symbols_sizes[i]);
+                Z3_symbol s    = Z3_mk_int_symbol(ctx, i);
+                decl           = Z3_mk_func_decl(ctx, s, 0, NULL, sort);
+                fdecl_cache[i] = decl;
+            }
+
+            Z3_add_const_interp(ctx, z3_m, decl, e);
         }
 
         // evaluate the query in the model
@@ -534,7 +565,8 @@ static cache_t cache;
         }
 
         for (i = 0; i < size; ++i)
-            Z3_dec_ref(ctx, z3_vals[i]);
+            if (z3_vals[i] != NULL)
+                Z3_dec_ref(ctx, z3_vals[i]);
         free(z3_vals);
 
         return res;
