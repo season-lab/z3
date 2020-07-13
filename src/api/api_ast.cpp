@@ -502,7 +502,7 @@ static cache_t cache;
             fdecl_cache = (Z3_func_decl*)calloc(sizeof(Z3_func_decl), size);
             fdecl_cache_size = size;
         } else if (fdecl_cache_size < size) {
-            fdecl_cache = (Z3_func_decl*)realloc(fdecl_cache, size);
+            fdecl_cache = (Z3_func_decl*)realloc(fdecl_cache, size * sizeof(Z3_func_decl));
             size_t i;
             for (i = fdecl_cache_size; i < size; ++i)
                 fdecl_cache[i] = 0;
