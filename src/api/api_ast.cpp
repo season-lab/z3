@@ -1219,6 +1219,13 @@ static cache_t cache;
                 }
                 case OP_SGT: {
                     register expr * const * args = ARGS(_expr);
+                    if (SIZE(args[0]) > 64) {
+                        arg1 = Z3_internal_eval(c, _expr, data, symbols_sizes, data_size);
+#if USE_CACHE
+                        cache.insert(expr_id, arg1);
+#endif
+                        return arg1;
+                    }
                     arg1 = EVAL_ARG(args, 0);
                     arg2 = EVAL_ARG(args, 1);
                     OPERATION(arg1, arg2, SIZE(args[0]), >, arg1);
@@ -1270,6 +1277,12 @@ static cache_t cache;
                 case OP_BXOR: {
                     register expr * const * args = ARGS(_expr);
                     unsigned n_args = APP(_expr)->get_num_args();
+                    if (n_args == 2 && to_expr(args[0])->get_id() == to_expr(args[1])->get_id()) {
+#if USE_CACHE
+                        cache.insert(expr_id, arg1);
+#endif
+                        return 0;
+                    }
                     size_t i = 1;
                     arg1 = EVAL_ARG(args, 0);
                     do {
