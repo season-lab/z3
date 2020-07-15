@@ -1279,7 +1279,7 @@ static cache_t cache;
                     unsigned n_args = APP(_expr)->get_num_args();
                     if (n_args == 2 && to_expr(args[0])->get_id() == to_expr(args[1])->get_id()) {
 #if USE_CACHE
-                        cache.insert(expr_id, arg1);
+                        cache.insert(expr_id, 0);
 #endif
                         return 0;
                     }
