@@ -519,7 +519,7 @@ static cache_t cache;
             }
 #endif
             Z3_ast e;
-            if (symbols_sizes[i] == 8 && byte_val_cache[data[i]] != NULL)
+            if (symbols_sizes[i] == 8 && byte_val_cache[data[i] & 0xFF] != NULL)
                 e = byte_val_cache[data[i] & 0xff];
             else {
                 Z3_sort sort = Z3_mk_bv_sort(ctx, symbols_sizes[i]);
