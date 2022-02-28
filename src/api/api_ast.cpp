@@ -1589,6 +1589,15 @@ static cache_t cache;
 #endif
                     return arg1;
                 }
+                case OP_BUREM0: {
+                    // AFAIU, a%0 == a
+                    register expr * const * args = ARGS(_expr);
+                    arg1 = EVAL_ARG(args, 0);
+#if USE_CACHE
+                    cache.insert(expr_id, arg1);
+#endif
+                    return arg1;
+                }
 #if 0
                 case OP_BSMOD_I: return Z3_OP_BSMOD_I;
 #endif
