@@ -538,6 +538,7 @@ static cache_t cache;
                 Z3_sort sort   = Z3_mk_bv_sort(ctx, symbols_sizes[i]);
                 Z3_symbol s    = Z3_mk_int_symbol(ctx, i);
                 decl           = Z3_mk_func_decl(ctx, s, 0, NULL, sort);
+                Z3_inc_ref(ctx, Z3_func_decl_to_ast(ctx, decl));
                 fdecl_cache[i] = decl;
             }
 
